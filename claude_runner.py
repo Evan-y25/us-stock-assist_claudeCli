@@ -1,88 +1,67 @@
 """
-claude_runner.py - Anthropic API + Tool Use 版本
+claude_runner.py - 使用本地 Claude Code CLI 执行分析任务
 
 流程：
-  1. 把提示词 + 4个 Tool Schema 发给 Anthropic API
-  2. LLM 自主决定调用哪个工具、传什么参数
-  3. 程序执行工具，把结果返回给 LLM
-  4. 循环直到 LLM 输出最终 JSON 结果
+  1. 构建包含工具调用说明的提示词
+  2. 通过 `claude -p` 子进程发送给 Claude Code
+  3. Claude Code 自主通过 Bash 调用 tool_cli.py 获取数据
+  4. 返回最终 JSON 分析结果
 """
 
 import json
 import logging
+import os
 import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import anthropic
-
-from tools import TOOL_SCHEMAS, execute_tool
-
 logger = logging.getLogger(__name__)
 
+# 项目根目录（tool_cli.py 所在目录）
+PROJECT_DIR = Path(__file__).parent.resolve()
 
-def _convert_tool_schema(schema: dict) -> dict:
-    """将 Bedrock 格式的 tool schema 转换为 Anthropic API 格式"""
-    return {
-        "name": schema["name"],
-        "description": schema["description"],
-        "input_schema": schema["inputSchema"]["json"]
-    }
+# 工具调用说明，注入到每个任务提示词前面
+TOOL_INSTRUCTION = f"""## 工具调用方式
+你可以通过 Bash 执行以下命令来获取实时数据：
+
+```bash
+python3 {PROJECT_DIR}/tool_cli.py <tool_name> '<json_params>'
+```
+
+可用工具及参数：
+
+1. **web_search** — 联网搜索最新新闻和市场数据
+   python3 {PROJECT_DIR}/tool_cli.py web_search '{{"query": "搜索关键词", "max_results": 5}}'
+
+2. **get_market_data** — 获取股票/ETF 价格、技术指标、财务数据
+   python3 {PROJECT_DIR}/tool_cli.py get_market_data '{{"ticker": "AAPL", "data_type": "financials"}}'
+   data_type 可选: price_history, technical_indicators, financials, short_interest
+   period 可选: 5d, 1mo, 3mo, 6mo, 1y, 2y（默认 3mo）
+
+3. **get_macro_data** — FRED 宏观经济指标
+   python3 {PROJECT_DIR}/tool_cli.py get_macro_data '{{"series_id": "FEDFUNDS"}}'
+   常用 series_id: CPIAUCSL, FEDFUNDS, GDP, UNRATE, DGS10, T10Y2Y, VIXCLS
+
+4. **get_sec_data** — SEC EDGAR 披露数据
+   python3 {PROJECT_DIR}/tool_cli.py get_sec_data '{{"query_type": "insider_trading", "ticker": "AAPL", "days_back": 30}}'
+   query_type 可选: insider_trading, institutional_13f, activist_filings, major_events
+
+**重要**：
+- 每次只调用你需要的工具，获取到数据后再进行分析
+- 请逐步调用工具收集数据，最后输出 JSON 结果
+- 最终输出时，只输出纯 JSON，不要在 JSON 前后添加任何说明文字、总结或 markdown 代码块标记
+- 确保 JSON 完整，所有大括号和方括号正确闭合
+"""
 
 
 class ClaudeRunner:
     def __init__(self, config: dict):
-        self.model_id = config.get("model_id", "claude-sonnet-4-5-20250514")
-        self.max_tokens = config.get("max_tokens", 4096)
-        self.max_tool_rounds = config.get("max_tool_rounds", 10)
+        self.model_id = config.get("model_id", "sonnet")
+        self.max_tokens = config.get("max_tokens", 16000)
         self.results_dir = Path(config.get("results_dir", "./results"))
         self.results_dir.mkdir(parents=True, exist_ok=True)
-
-        # Tool 执行需要的 API Keys
-        self.api_keys = {
-            "tavily": config.get("tavily_api_key", ""),
-            "fred": config.get("fred_api_key", ""),
-        }
-
-        # 初始化 Anthropic 客户端
-        # 优先级：配置文件 api_key > 配置文件 auth_token > Claude Code OAuth > 环境变量
-        api_key = config.get("api_key", "")
-        auth_token = config.get("auth_token", "")
-
-        if api_key and api_key not in ("YOUR_ANTHROPIC_API_KEY", ""):
-            self.client = anthropic.Anthropic(api_key=api_key)
-        elif auth_token and auth_token not in ("", "auto"):
-            self.client = anthropic.Anthropic(auth_token=auth_token)
-        elif auth_token == "auto":
-            # 自动从 macOS Keychain 读取 Claude Code 的 OAuth token
-            token = self._load_claude_code_oauth()
-            self.client = anthropic.Anthropic(auth_token=token)
-        else:
-            # 兜底：让 SDK 自己从环境变量读取
-            self.client = anthropic.Anthropic()
-
-        # 转换 tool schemas
-        self.tools = [_convert_tool_schema(s) for s in TOOL_SCHEMAS]
-
-    @staticmethod
-    def _load_claude_code_oauth() -> str:
-        """从 macOS Keychain 读取 Claude Code 的 OAuth access token"""
-        import subprocess
-        try:
-            raw = subprocess.check_output(
-                ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
-                stderr=subprocess.DEVNULL, text=True
-            ).strip()
-            creds = json.loads(raw)
-            token = creds["claudeAiOauth"]["accessToken"]
-            logger.info("已从 macOS Keychain 读取 Claude Code OAuth token")
-            return token
-        except (subprocess.CalledProcessError, KeyError, json.JSONDecodeError) as e:
-            raise RuntimeError(
-                "无法从 macOS Keychain 读取 Claude Code OAuth token。"
-                "请确保已通过 'claude' 命令登录，或改用 api_key 方式认证。"
-            ) from e
 
     def build_prompt(self, template: str, variables: dict = None) -> str:
         """将模板变量注入提示词"""
@@ -96,110 +75,103 @@ class ClaudeRunner:
 
     def run(self, task_name: str, prompt: str) -> dict:
         """
-        主执行方法：Anthropic Tool Use 循环
-        LLM 自主调用工具直到完成任务
+        使用本地 Claude Code CLI 执行分析任务
+        Claude Code 自主通过 Bash 调用 tool_cli.py 获取数据
         """
         logger.info(f"[{task_name}] 开始执行 @ {datetime.now().strftime('%H:%M:%S')}")
 
-        messages = [{"role": "user", "content": prompt}]
-        tool_call_count = 0
+        # 将工具调用说明注入提示词
+        full_prompt = TOOL_INSTRUCTION + "\n\n" + prompt
 
         try:
-            for round_num in range(self.max_tool_rounds + 1):
+            # 构建环境变量：清除 CLAUDECODE 以允许嵌套调用
+            env = os.environ.copy()
+            env.pop("CLAUDECODE", None)
 
-                # 调用 Anthropic Messages API
-                response = self.client.messages.create(
-                    model=self.model_id,
-                    max_tokens=self.max_tokens,
-                    tools=self.tools,
-                    messages=messages,
-                    temperature=0.1,
-                )
-                stop_reason = response.stop_reason
+            # 调用 claude CLI
+            logger.info(f"[{task_name}] 调用 Claude Code CLI (model: {self.model_id})...")
+            result = subprocess.run(
+                [
+                    "claude", "-p", full_prompt,
+                    "--output-format", "text",
+                    "--model", self.model_id,
+                    "--max-turns", "30",
+                    "--allowedTools", "Bash",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                env=env,
+                cwd=str(PROJECT_DIR),
+            )
 
-                logger.info(f"[{task_name}] Round {round_num} - stop_reason: {stop_reason}")
+            if result.returncode != 0:
+                logger.error(f"[{task_name}] Claude Code 返回错误: {result.stderr}")
+                return self._error_result(task_name, f"CLI_ERROR: {result.stderr[:500]}")
 
-                # ── 情况1：LLM 完成，输出最终结果 ──
-                if stop_reason == "end_turn":
-                    final_text = self._extract_text(response.content)
-                    parsed = self._extract_json(final_text)
+            output = result.stdout.strip()
+            logger.info(f"[{task_name}] Claude Code 返回 {len(output)} 字符")
 
-                    if not parsed:
-                        logger.warning(f"[{task_name}] 无法解析 JSON，保存原始输出")
-                        parsed = {"raw_output": final_text, "parse_error": True}
+            # 解析 JSON
+            parsed = self._extract_json(output)
 
-                    parsed["_meta"] = {
-                        "task_name": task_name,
-                        "executed_at": datetime.now().isoformat(),
-                        "tool_calls": tool_call_count,
-                        "rounds": round_num,
-                        "success": "parse_error" not in parsed
-                    }
+            if not parsed:
+                logger.warning(f"[{task_name}] 无法解析 JSON，保存原始输出")
+                parsed = {"raw_output": output, "parse_error": True}
 
-                    self._save_result(task_name, parsed)
-                    logger.info(f"[{task_name}] 完成，共调用工具 {tool_call_count} 次")
-                    return parsed
+            parsed["_meta"] = {
+                "task_name": task_name,
+                "executed_at": datetime.now().isoformat(),
+                "runner": "claude_code_cli",
+                "model": self.model_id,
+                "success": "parse_error" not in parsed,
+            }
 
-                # ── 情况2：LLM 要调用工具 ──
-                elif stop_reason == "tool_use":
-                    # 将 assistant 回复加入消息历史
-                    messages.append({
-                        "role": "assistant",
-                        "content": [block.model_dump() for block in response.content]
-                    })
+            self._save_result(task_name, parsed)
+            logger.info(f"[{task_name}] 完成")
+            return parsed
 
-                    tool_results = []
-                    for block in response.content:
-                        if block.type == "tool_use":
-                            tool_call_count += 1
-                            output = execute_tool(
-                                block.name,
-                                block.input,
-                                self.api_keys
-                            )
-                            tool_results.append({
-                                "type": "tool_result",
-                                "tool_use_id": block.id,
-                                "content": output or "(no output)"
-                            })
-
-                    if not tool_results:
-                        logger.error(f"[{task_name}] stop_reason=tool_use 但未找到任何 tool_use block")
-                        break
-
-                    messages.append({"role": "user", "content": tool_results})
-
-                else:
-                    logger.warning(f"[{task_name}] 意外的 stop_reason: {stop_reason}")
-                    break
-
-            logger.error(f"[{task_name}] 超过最大工具调用轮次 ({self.max_tool_rounds})")
-            return self._error_result(task_name, "EXCEEDED_MAX_ROUNDS")
-
-        except anthropic.APIError as e:
-            logger.error(f"[{task_name}] Anthropic API 错误: {e}")
-            return self._error_result(task_name, f"API_ERROR: {e}")
+        except subprocess.TimeoutExpired:
+            logger.error(f"[{task_name}] Claude Code 执行超时 (600s)")
+            return self._error_result(task_name, "TIMEOUT")
 
         except Exception as e:
             logger.exception(f"[{task_name}] 未预期错误: {e}")
             return self._error_result(task_name, str(e))
 
-    def _extract_text(self, content: list) -> str:
-        return " ".join(
-            block.text
-            for block in content
-            if block.type == "text"
-        ).strip()
-
     def _extract_json(self, text: str) -> Optional[dict]:
+        """从文本中提取 JSON 对象"""
+        # 先尝试直接解析
         try:
             return json.loads(text.strip())
         except json.JSONDecodeError:
             pass
-        text = re.sub(r"```json\s*", "", text)
-        text = re.sub(r"```\s*", "", text)
+
+        # 尝试提取 ```json ... ``` 代码块中的内容
+        code_block = re.search(r"```json\s*([\s\S]*?)```", text)
+        if code_block:
+            try:
+                return json.loads(code_block.group(1).strip())
+            except json.JSONDecodeError:
+                pass
+
+        # 去掉所有 markdown code fence 再找
+        cleaned = re.sub(r"```json\s*", "", text)
+        cleaned = re.sub(r"```\s*", "", cleaned)
+
+        # 找到最外层最大的 { ... } 块
+        # 从后往前找最后一个 }，从前往后找第一个 {
+        last_brace = cleaned.rfind("}")
+        first_brace = cleaned.find("{")
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            try:
+                return json.loads(cleaned[first_brace:last_brace+1])
+            except json.JSONDecodeError:
+                pass
+
+        # 逐层匹配大括号
         depth, start = 0, -1
-        for i, char in enumerate(text):
+        for i, char in enumerate(cleaned):
             if char == "{":
                 if depth == 0:
                     start = i
@@ -208,7 +180,7 @@ class ClaudeRunner:
                 depth -= 1
                 if depth == 0 and start != -1:
                     try:
-                        return json.loads(text[start:i+1])
+                        return json.loads(cleaned[start:i+1])
                     except json.JSONDecodeError:
                         continue
         return None
@@ -225,7 +197,8 @@ class ClaudeRunner:
             "_meta": {
                 "task_name": task_name,
                 "executed_at": datetime.now().isoformat(),
+                "runner": "claude_code_cli",
                 "success": False,
-                "error": error_msg
+                "error": error_msg,
             }
         }

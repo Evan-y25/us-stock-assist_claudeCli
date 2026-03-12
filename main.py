@@ -67,12 +67,9 @@ def execute_task(task_name: str, config: dict, prompts: dict):
     logger.info(f"{'='*50}")
 
     try:
-        # 1. 初始化 Claude Runner（合并 Claude + Tool API Keys）
+        # 1. 初始化 Claude Runner（使用本地 Claude Code CLI）
         claude_config = config.get("claude", {}).copy()
         claude_config["results_dir"] = config.get("storage", {}).get("results_dir", "./results")
-        tools_config = config.get("tools", {})
-        claude_config["tavily_api_key"] = tools_config.get("tavily_api_key", "")
-        claude_config["fred_api_key"] = tools_config.get("fred_api_key", "")
         runner = ClaudeRunner(claude_config)
 
         # 2. 构建提示词（注入变量）
@@ -82,7 +79,7 @@ def execute_task(task_name: str, config: dict, prompts: dict):
 
         prompt = runner.build_prompt(template, variables)
 
-        # 3. 执行 Bedrock Tool Use 循环
+        # 3. 执行 Claude Code CLI 分析
         result = runner.run(task_name, prompt)
 
         if not result.get("_meta", {}).get("success", False):

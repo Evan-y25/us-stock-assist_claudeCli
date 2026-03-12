@@ -149,6 +149,17 @@ DATABASE_SCHEMAS = {
             ]}},
         }
     },
+    "correlation_map": {
+        "title": "🔗 关联性地图",
+        "properties": {
+            "分析标题":         {"title": {}},
+            "分析日期":         {"date": {}},
+            "当前VIX":          {"number": {"format": "number"}},
+            "收益率曲线利差":   {"number": {"format": "number"}},
+            "宏观阶段":         {"rich_text": {}},
+            "配置影响":         {"rich_text": {}},
+        }
+    },
     "macro_analysis": {
         "title": "🌍 宏观面分析",
         "properties": {

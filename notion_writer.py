@@ -248,6 +248,44 @@ class NotionWriter:
             }
             self._create_page(db_id, properties)
 
+    def write_correlation_map(self, data: dict):
+        """写入关联性地图"""
+        db_id = self.databases.get("correlation_map")
+        if not db_id:
+            logger.warning("未配置 correlation_map 数据库ID，跳过")
+            return
+
+        properties = {
+            "分析标题": self._title(f"关联性地图 {data.get('analysis_date', '')}"),
+            "分析日期": self._date(data.get("analysis_date", "")),
+            "当前VIX": self._number(data.get("current_vix", 0)),
+            "收益率曲线利差": self._number(data.get("yield_curve_spread", 0)),
+            "宏观阶段": self._text(data.get("macro_regime", "")),
+            "配置影响": self._text(data.get("regime_implication", "")),
+        }
+
+        # 构建页面正文：每个异常资产对一个段落
+        children = []
+        for anomaly in data.get("correlation_anomalies", []):
+            children.append({"object": "block", "type": "heading_3",
+                             "heading_3": {"rich_text": [{"text": {"content": anomaly.get("asset_pair", "")}}]}})
+            children.append({"object": "block", "type": "paragraph",
+                             "paragraph": {"rich_text": [{"text": {"content":
+                                 f"异常: {anomaly.get('anomaly_description', '')}"
+                             }}]}})
+            children.append({"object": "block", "type": "paragraph",
+                             "paragraph": {"rich_text": [{"text": {"content":
+                                 f"历史信号: {anomaly.get('historical_signal_meaning', '')}"
+                             }}]}})
+            trade = anomaly.get("normalization_trade", {})
+            if trade:
+                children.append({"object": "block", "type": "paragraph",
+                                 "paragraph": {"rich_text": [{"text": {"content":
+                                     f"均值回归交易: {trade.get('description', '')} | 工具: {', '.join(trade.get('instruments', []))} | 触发: {trade.get('entry_trigger', '')}"
+                                 }}]}})
+
+        self._create_page(db_id, properties, children[:100])
+
     def write_macro_analysis(self, data: dict):
         """写入宏观面分析"""
         db_id = self.databases.get("macro_analysis")
@@ -348,6 +386,7 @@ class NotionWriter:
             "short_squeeze": self.write_short_squeeze,
             "ma_radar": self.write_ma_radar,
             "sentiment_arbitrage": self.write_sentiment_arb,
+            "correlation_map": self.write_correlation_map,
             "institutional_positioning": self.write_institutional,
             "dividend_danger": self.write_dividend_danger,
             "daily_trade_ideas": self.write_daily_trade,
