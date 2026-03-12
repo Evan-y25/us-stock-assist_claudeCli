@@ -67,7 +67,7 @@ def execute_task(task_name: str, config: dict, prompts: dict):
     logger.info(f"{'='*50}")
 
     try:
-        # 1. 初始化 Claude Runner（合并 Bedrock + Tool API Keys）
+        # 1. 初始化 Claude Runner（合并 Claude + Tool API Keys）
         claude_config = config.get("claude", {}).copy()
         claude_config["results_dir"] = config.get("storage", {}).get("results_dir", "./results")
         tools_config = config.get("tools", {})

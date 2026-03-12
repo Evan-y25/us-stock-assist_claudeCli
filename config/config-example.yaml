@@ -11,13 +11,15 @@ notion:
     dividend_danger: YOUR_DATABASE_ID
 
 claude:
-  model_id: au.anthropic.claude-haiku-4-5-20251001-v1:0
-  region: ap-southeast-2
-  max_tokens: 4000
+  # 认证方式（三选一）：
+  #   1. api_key: 填写 Anthropic API Key（https://console.anthropic.com/settings/keys）
+  #   2. auth_token: auto  — 自动从 macOS Keychain 读取 Claude Code 的 OAuth token
+  #   3. 都不填 — 从环境变量 ANTHROPIC_API_KEY 或 ANTHROPIC_AUTH_TOKEN 读取
+  api_key: YOUR_ANTHROPIC_API_KEY
+  auth_token: auto                      # 设为 auto 即可复用 Claude Code 的登录态
+  model_id: claude-sonnet-4-5-20250514
+  max_tokens: 4096
   max_tool_rounds: 10
-  timeout_seconds: 300
-  aws_access_key_id: YOUR_AWS_ACCESS_KEY_ID
-  aws_secret_access_key: YOUR_AWS_SECRET_ACCESS_KEY
 
 tools:
   tavily_api_key: YOUR_TAVILY_API_KEY   # https://app.tavily.com
@@ -49,11 +51,6 @@ portfolio:
   exposure: 科技股(40%), 消费股(30%), 现金(20%), 黄金ETF(10%)
   base_currency: USD
   total_value_usd: 100000
-
-notifications:
-  enabled: false
-  feishu_webhook: ''
-  email: ''
 
 storage:
   results_dir: ./results

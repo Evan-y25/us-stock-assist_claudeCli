@@ -260,7 +260,7 @@ def _web_search(tool_input: dict, api_key: str) -> str:
 
 def _get_market_data(tool_input: dict) -> str:
     import yfinance as yf
-    import pandas_ta as ta
+    import pandas as pd
 
     ticker = tool_input["ticker"]
     data_type = tool_input["data_type"]
@@ -292,36 +292,61 @@ def _get_market_data(tool_input: dict) -> str:
         if hist.empty:
             return json.dumps({"error": f"无法获取 {ticker} 的价格数据"})
 
-        # 计算技术指标
-        hist.ta.rsi(length=14, append=True)
-        hist.ta.macd(fast=12, slow=26, signal=9, append=True)
-        hist.ta.bbands(length=20, append=True)
-        hist.ta.sma(length=5, append=True)
-        hist.ta.sma(length=20, append=True)
-        hist.ta.sma(length=60, append=True)
+        # 计算技术指标（纯 pandas 实现，无需 pandas_ta）
+        close = hist["Close"]
 
-        latest = hist.iloc[-1]
+        # RSI 14
+        delta = close.diff()
+        gain = delta.where(delta > 0, 0.0).rolling(14).mean()
+        loss = (-delta.where(delta < 0, 0.0)).rolling(14).mean()
+        rs = gain / loss.replace(0, float("nan"))
+        rsi_14 = 100 - (100 / (1 + rs))
+
+        # MACD (12, 26, 9)
+        ema12 = close.ewm(span=12, adjust=False).mean()
+        ema26 = close.ewm(span=26, adjust=False).mean()
+        macd_line = ema12 - ema26
+        macd_signal = macd_line.ewm(span=9, adjust=False).mean()
+        macd_hist = macd_line - macd_signal
+
+        # Bollinger Bands (20, 2)
+        bb_mid = close.rolling(20).mean()
+        bb_std = close.rolling(20).std()
+        bb_upper = bb_mid + 2 * bb_std
+        bb_lower = bb_mid - 2 * bb_std
+
+        # SMA
+        sma5 = close.rolling(5).mean()
+        sma20 = close.rolling(20).mean()
+        sma60 = close.rolling(60).mean()
+
+        latest_rsi = float(rsi_14.iloc[-1]) if pd.notna(rsi_14.iloc[-1]) else 50.0
+        latest_sma5 = float(sma5.iloc[-1]) if pd.notna(sma5.iloc[-1]) else 0
+        latest_sma20 = float(sma20.iloc[-1]) if pd.notna(sma20.iloc[-1]) else 0
+        latest_sma60 = float(sma60.iloc[-1]) if pd.notna(sma60.iloc[-1]) else 0
+        latest_price = float(close.iloc[-1])
+
         result = {
             "ticker": ticker,
-            "current_price": round(hist["Close"].iloc[-1], 2),
-            "rsi_14": round(float(latest.get("RSI_14", 0)), 2),
-            "macd": round(float(latest.get("MACD_12_26_9", 0)), 4),
-            "macd_signal": round(float(latest.get("MACDs_12_26_9", 0)), 4),
-            "macd_histogram": round(float(latest.get("MACDh_12_26_9", 0)), 4),
-            "bb_upper": round(float(latest.get("BBU_20_2.0", 0)), 2),
-            "bb_middle": round(float(latest.get("BBM_20_2.0", 0)), 2),
-            "bb_lower": round(float(latest.get("BBL_20_2.0", 0)), 2),
-            "sma_5": round(float(latest.get("SMA_5", 0)), 2),
-            "sma_20": round(float(latest.get("SMA_20", 0)), 2),
-            "sma_60": round(float(latest.get("SMA_60", 0)), 2),
+            "current_price": round(latest_price, 2),
+            "rsi_14": round(latest_rsi, 2),
+            "macd": round(float(macd_line.iloc[-1]), 4),
+            "macd_signal": round(float(macd_signal.iloc[-1]), 4),
+            "macd_histogram": round(float(macd_hist.iloc[-1]), 4),
+            "bb_upper": round(float(bb_upper.iloc[-1]), 2) if pd.notna(bb_upper.iloc[-1]) else 0,
+            "bb_middle": round(float(bb_mid.iloc[-1]), 2) if pd.notna(bb_mid.iloc[-1]) else 0,
+            "bb_lower": round(float(bb_lower.iloc[-1]), 2) if pd.notna(bb_lower.iloc[-1]) else 0,
+            "sma_5": round(latest_sma5, 2),
+            "sma_20": round(latest_sma20, 2),
+            "sma_60": round(latest_sma60, 2),
             "trend": (
-                "强势多头" if hist["Close"].iloc[-1] > latest.get("SMA_5", 0) > latest.get("SMA_20", 0) > latest.get("SMA_60", 0)
-                else "强势空头" if hist["Close"].iloc[-1] < latest.get("SMA_5", 0) < latest.get("SMA_20", 0)
+                "强势多头" if latest_price > latest_sma5 > latest_sma20 > latest_sma60 > 0
+                else "强势空头" if latest_price < latest_sma5 < latest_sma20 and latest_sma20 > 0
                 else "震荡"
             ),
             "rsi_signal": (
-                "超买" if latest.get("RSI_14", 50) > 70
-                else "超卖" if latest.get("RSI_14", 50) < 30
+                "超买" if latest_rsi > 70
+                else "超卖" if latest_rsi < 30
                 else "中性"
             )
         }
