@@ -484,7 +484,117 @@ prompts:
       }}
 
   # ────────────────────────────────────────────
-  # 10. 每周综合报告（周一最先执行）
+  # 10. 每日多空精选（每个交易日执行）
+  # ────────────────────────────────────────────
+  daily_trade_ideas:
+    name: "每日多空精选"
+    schedule: "daily_09:00"
+    template: |
+      今天是{DATE}。你是一位擅长短线交易的量化基金经理。
+
+      ## 你有以下工具可以使用
+      - web_search：搜索今日市场热点、涨跌异动、催化剂新闻、情绪指标
+      - get_market_data：获取候选标的的技术指标和价格数据
+      - get_macro_data：获取 VIX 恐慌指数历史数据
+
+      ## 任务步骤
+
+      ### Step 0：情绪环境评估（必须最先执行，结果将影响后续策略）
+      1. 用 get_macro_data(series_id="VIXCLS") 获取 VIX 历史数据，判断当前 VIX 所处分位
+      2. 用 web_search 搜索：
+         - "CNN fear and greed index today {DATE}"
+         - "CBOE put call ratio today {DATE}"
+         - "US market futures sentiment {DATE}"
+      3. 综合以上数据，确定当前情绪体制（regime）并应用对应策略偏好：
+
+         | 情绪体制       | VIX 水平 | Fear&Greed | 策略偏向                                   |
+         |--------------|---------|-----------|------------------------------------------|
+         | 极度恐慌       | > 30    | < 25      | 禁止追涨动量多单；优先寻找超跌反弹做多机会；做空需谨慎（已大跌） |
+         | 恐慌偏高       | 20-30   | 25-45     | 多单偏向防御/超跌反弹；空单需要更强技术破位信号    |
+         | 中性           | 15-20   | 45-55     | 正常动量策略，多空均可                       |
+         | 贪婪偏高       | 12-15   | 55-75     | 多单需严控止损；空单信号更可靠，优先寻找超买破位   |
+         | 极度贪婪       | < 12    | > 75      | 警惕做多风险；优先做空超买/基本面恶化标的；盈亏比要求提高至 2.5 |
+
+      ### Step 1：做多标的
+      1. 用 web_search 搜索（根据情绪体制选择关键词）：
+         - 极度恐慌/恐慌偏高时："oversold bounce candidates today {DATE} strong support"
+         - 中性/贪婪时："stocks bullish momentum breakout today {DATE} technical breakout"
+         找出3-5个做多候选
+      2. 对每个候选：
+         - 用 get_market_data(ticker=候选股, data_type="technical_indicators") 确认技术面
+           中性/贪婪环境要求：RSI 40-65 / 价格站上20日均线 / 成交量放大
+           恐慌环境要求：RSI < 35（超跌）/ 价格靠近关键支撑位 / 有明确反弹催化剂
+         - 用 get_market_data(ticker=候选股, data_type="price_history", period="1mo") 确认趋势
+      3. 选出评分最高的1个
+
+      ### Step 2：做空标的
+      1. 用 web_search 搜索（根据情绪体制选择关键词）：
+         - 极度贪婪/贪婪偏高时："overbought stocks breakdown today {DATE} high short interest"
+         - 中性时："stocks bearish breakdown overbought today {DATE} downgrade earnings miss"
+         - 恐慌时（慎空）："dead cat bounce exhaustion stocks {DATE}"
+         找出3-5个做空候选
+      2. 对每个候选：
+         - 用 get_market_data(ticker=候选股, data_type="technical_indicators") 确认超买/破位
+           要求：RSI > 70 或价格跌破关键支撑 / 量能配合
+         - 用 get_market_data(ticker=候选股, data_type="price_history", period="1mo") 确认下行趋势
+      3. 选出评分最高的1个
+
+      ## 盈亏比要求
+      - 正常情绪（VIX 12-25）：盈亏比 >= 2.0
+      - 极度贪婪（VIX < 12）：盈亏比 >= 2.5（市场脆弱，要求更高补偿）
+      - 极度恐慌（VIX > 30）：多单盈亏比 >= 2.0；空单盈亏比 >= 2.5（追空风险大）
+      不满足要求的候选直接跳过。
+
+      ## 输出要求
+      严格输出以下JSON：
+      {{
+        "analysis_date": "{DATE}",
+        "sentiment": {{
+          "vix_current": 0,
+          "vix_percentile_1y": "",
+          "fear_greed_index": 0,
+          "fear_greed_label": "极度恐慌/恐慌/中性/贪婪/极度贪婪",
+          "put_call_ratio": 0,
+          "regime": "极度恐慌/恐慌偏高/中性/贪婪偏高/极度贪婪",
+          "regime_implication": "一句话说明当前情绪对今日策略的影响"
+        }},
+        "market_context": "今日大盘背景一句话概括（情绪/趋势/重要事件）",
+        "long_idea": {{
+          "ticker": "",
+          "company_name": "",
+          "direction": "多",
+          "current_price": 0,
+          "entry_zone": "",
+          "stop_loss": 0,
+          "target_price": 0,
+          "risk_reward_ratio": 0,
+          "thesis": "",
+          "catalyst": "",
+          "time_horizon": "日内/1-3天/1-2周",
+          "technical_signal": "",
+          "sentiment_alignment": "顺势/逆势",
+          "source_url": ""
+        }},
+        "short_idea": {{
+          "ticker": "",
+          "company_name": "",
+          "direction": "空",
+          "current_price": 0,
+          "entry_zone": "",
+          "stop_loss": 0,
+          "target_price": 0,
+          "risk_reward_ratio": 0,
+          "thesis": "",
+          "catalyst": "",
+          "time_horizon": "日内/1-3天/1-2周",
+          "technical_signal": "",
+          "sentiment_alignment": "顺势/逆势",
+          "source_url": ""
+        }}
+      }}
+
+  # ────────────────────────────────────────────
+  # 11. 每周综合报告（周一最先执行）
   # ────────────────────────────────────────────
   weekly_report:
     name: "可自动化周报"

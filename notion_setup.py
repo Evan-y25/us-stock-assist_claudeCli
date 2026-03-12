@@ -191,6 +191,56 @@ DATABASE_SCHEMAS = {
             "来源":             {"url": {}},
         }
     },
+    "daily_trade": {
+        "title": "📈 每日多空精选",
+        "properties": {
+            "标的":     {"title": {}},
+            "分析日期": {"date": {}},
+            "方向":     {"select": {"options": [
+                {"name": "多", "color": "green"},
+                {"name": "空", "color": "red"},
+            ]}},
+            "当前价格": {"number": {"format": "dollar"}},
+            "入场区间": {"rich_text": {}},
+            "止损价":   {"number": {"format": "dollar"}},
+            "目标价":   {"number": {"format": "dollar"}},
+            "盈亏比":   {"number": {"format": "number"}},
+            "投资逻辑": {"rich_text": {}},
+            "催化剂":   {"rich_text": {}},
+            "持有周期": {"select": {"options": [
+                {"name": "日内",   "color": "red"},
+                {"name": "1-3天",  "color": "yellow"},
+                {"name": "1-2周",  "color": "blue"},
+            ]}},
+            "技术信号": {"rich_text": {}},
+            "大盘背景": {"rich_text": {}},
+            "来源":     {"url": {}},
+        }
+    },
+    "correlation_map": {
+        "title": "🗺️ 关联性地图",
+        "properties": {
+            "分析标题":       {"title": {}},
+            "分析日期":       {"date": {}},
+            "当前VIX":        {"number": {"format": "number"}},
+            "收益率曲线利差": {"number": {"format": "number"}},
+            "宏观阶段":       {"rich_text": {}},
+            "资产配置影响":   {"rich_text": {}},
+            "关联异常摘要":   {"rich_text": {}},
+        }
+    },
+    "portfolio_hedge": {
+        "title": "🛡️ 对冲策略分析",
+        "properties": {
+            "策略标题":  {"title": {}},
+            "分析日期":  {"date": {}},
+            "当前VIX":   {"number": {"format": "number"}},
+            "VIX百分位": {"rich_text": {}},
+            "组合暴露":  {"rich_text": {}},
+            "推荐策略":  {"rich_text": {}},
+            "推荐原因":  {"rich_text": {}},
+        }
+    },
 }
 
 
@@ -250,9 +300,9 @@ def main():
         help="Notion 父页面 ID（从页面 URL 中复制，例如 https://notion.so/My-Page-<ID>）"
     )
     parser.add_argument(
-        "--skip-existing",
+        "--force",
         action="store_true",
-        help="跳过 config.yaml 中已有真实 ID 的数据库（非 YOUR_DATABASE_ID）"
+        help="强制重新创建所有数据库，包括 config.yaml 中已有 ID 的（默认跳过已有 ID 的）"
     )
     args = parser.parse_args()
 
@@ -272,8 +322,8 @@ def main():
     errors = []
 
     for key, schema in DATABASE_SCHEMAS.items():
-        current_val = existing_ids.get(key, "YOUR_DATABASE_ID")
-        if args.skip_existing and current_val != "YOUR_DATABASE_ID":
+        current_val = existing_ids.get(key, "")
+        if not args.force and current_val and current_val != "YOUR_DATABASE_ID":
             print(f"  跳过 {key}（已有 ID: {current_val}）")
             continue
         try:

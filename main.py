@@ -189,6 +189,7 @@ def main():
             "correlation_map",
             "dividend_danger",
             "institutional_positioning",
+            "daily_trade_ideas",
         ]
         for task_name in task_order:
             if task_name in prompts and prompts[task_name].get("schedule") != "on_demand":
